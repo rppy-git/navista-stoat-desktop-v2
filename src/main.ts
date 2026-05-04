@@ -1,6 +1,6 @@
 import { IUpdateInfo, updateElectronApp } from "update-electron-app";
 
-import { BrowserWindow, Notification, app, shell } from "electron";
+import { BrowserWindow, Notification, app, ipcMain, shell } from "electron";
 import started from "electron-squirrel-startup";
 
 import { autoLaunch } from "./native/autoLaunch";
@@ -33,6 +33,26 @@ const onNotifyUser = (_info: IUpdateInfo) => {
 
   notification.show();
 };
+
+ipcMain.on("notify", (_event, payload: DesktopNotificationPayload) => {
+  const notification = new Notification({
+    title: payload.title,
+    body: payload.body ?? "",
+    icon: payload.icon,
+    silent: false,
+  });
+
+  notification.on("click", () => {
+    mainWindow.show();
+    mainWindow.focus();
+
+    if (payload.path) {
+      void mainWindow.loadURL(new URL(payload.path, BUILD_URL).toString());
+    }
+  });
+
+  notification.show();
+});
 
 if (acquiredLock) {
   // start auto update logic
