@@ -21,7 +21,7 @@ export let mainWindow: BrowserWindow;
 export const BUILD_URL = new URL(
   app.commandLine.hasSwitch("force-server")
     ? app.commandLine.getSwitchValue("force-server")
-    : /*MAIN_WINDOW_VITE_DEV_SERVER_URL ??*/ "https://chat.navista.fr",
+    : /*MAIN_WINDOW_VITE_DEV_SERVER_URL ??*/ "https://stoat.navista.fr",
 );
 
 // internal window state

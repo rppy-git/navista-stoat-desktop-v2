@@ -9,11 +9,17 @@ import { initDiscordRpc } from "./native/discordRpc";
 import { initTray } from "./native/tray";
 import { BUILD_URL, createMainWindow, mainWindow } from "./native/window";
 
+const APP_USER_MODEL_ID = "com.squirrel.ChatNavista.ChatNavista";
+
 // Squirrel-specific logic
 // create/remove shortcuts on Windows when installing / uninstalling
 // we just need to close out of the app immediately
 if (started) {
   app.quit();
+}
+
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
 // disable hw-accel if so requested
@@ -53,11 +59,6 @@ if (acquiredLock) {
 
     initTray();
     initDiscordRpc();
-
-    // Windows specific fix for notifications
-    if (process.platform === "win32") {
-      app.setAppUserModelId("chat.stoat.notifications");
-    }
   });
 
   // focus the window if we try to launch again
