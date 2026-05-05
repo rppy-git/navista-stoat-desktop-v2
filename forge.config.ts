@@ -36,6 +36,8 @@ const makers: ForgeConfig["makers"] = [
     exe: `${STRINGS.execName}.exe`,
     setupExe: `${STRINGS.execName}-setup.exe`,
     copyright: "Copyright (C) 2025 Revolt Platforms LTD",
+    appUserModelId: "com.squirrel.ChatNavista.ChatNavista",
+
   }),
   new MakerZIP({}),
 ];

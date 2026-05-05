@@ -13,13 +13,3 @@ declare type DesktopConfig = {
     isMaximised: boolean;
   };
 };
-
-declare type DesktopNotificationPayload = {
-  title: string;
-  body?: string;
-  icon?: string;
-  image?: string;
-  tag?: string;
-  timestamp?: number;
-  path?: string;
-};
