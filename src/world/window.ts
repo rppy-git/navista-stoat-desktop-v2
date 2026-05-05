@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+﻿import { contextBridge, ipcRenderer } from "electron";
 
 import { version } from "../../package.json";
 
@@ -15,4 +15,12 @@ contextBridge.exposeInMainWorld("native", {
   close: () => ipcRenderer.send("close"),
 
   setBadgeCount: (count: number) => ipcRenderer.send("setBadgeCount", count),
+  notifyDesktopMessage: (payload: {
+    title: string;
+    body?: string;
+    icon?: string;
+    image?: string;
+    path?: string;
+    silent?: boolean;
+  }) => ipcRenderer.send("notify-message", payload),
 });

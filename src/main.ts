@@ -1,6 +1,6 @@
-import { IUpdateInfo, updateElectronApp } from "update-electron-app";
+﻿import { IUpdateInfo, updateElectronApp } from "update-electron-app";
 
-import { BrowserWindow, Notification, app, shell } from "electron";
+import { BrowserWindow, Notification, app, ipcMain, shell } from "electron";
 import started from "electron-squirrel-startup";
 
 import { autoLaunch } from "./native/autoLaunch";
@@ -10,6 +10,37 @@ import { initTray } from "./native/tray";
 import { BUILD_URL, createMainWindow, mainWindow } from "./native/window";
 
 const APP_USER_MODEL_ID = "com.squirrel.ChatNavista.ChatNavista";
+
+type DesktopNotificationPayload = {
+  title: string;
+  body?: string;
+  icon?: string;
+  image?: string;
+  path?: string;
+  silent?: boolean;
+};
+
+function restoreMainWindow() {
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  mainWindow.focus();
+}
+
+function openNotificationPath(path?: string) {
+  if (!path) return;
+
+  const targetUrl = new URL(path, BUILD_URL).toString();
+
+  if (mainWindow.webContents.getURL() !== targetUrl) {
+    void mainWindow.loadURL(targetUrl);
+  }
+}
 
 // Squirrel-specific logic
 // create/remove shortcuts on Windows when installing / uninstalling
@@ -49,6 +80,22 @@ if (acquiredLock) {
     // create window and application contexts
     createMainWindow();
 
+    ipcMain.on("notify-message", (_event, payload: DesktopNotificationPayload) => {
+      const notification = new Notification({
+        title: payload.title,
+        body: payload.body,
+        icon: payload.icon,
+        silent: payload.silent ?? true,
+      });
+
+      notification.on("click", () => {
+        restoreMainWindow();
+        openNotificationPath(payload.path);
+      });
+
+      notification.show();
+    });
+
     // enable auto start on Windows and MacOS
     if (config.firstLaunch) {
       if (process.platform === "win32" || process.platform === "darwin") {
@@ -63,9 +110,7 @@ if (acquiredLock) {
 
   // focus the window if we try to launch again
   app.on("second-instance", () => {
-    mainWindow.show();
-    mainWindow.restore();
-    mainWindow.focus();
+    restoreMainWindow();
   });
 
   // macOS specific behaviour to keep app active in dock:
@@ -81,8 +126,7 @@ if (acquiredLock) {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
     } else {
-      mainWindow.show();
-      mainWindow.focus();
+      restoreMainWindow();
     }
   });
 
