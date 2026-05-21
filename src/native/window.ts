@@ -158,6 +158,142 @@ export function createMainWindow() {
     config.sync();
   });
 
+  void mainWindow.webContents.executeJavaScript(`
+    (() => {
+      if (window.__tchatElementFullscreenInstalled) return;
+      window.__tchatElementFullscreenInstalled = true;
+
+      let fullscreenElement = null;
+      let fullscreenHost = null;
+      let fullscreenPlaceholder = null;
+      let previousBodyOverflow = "";
+      let previousElementStyle = null;
+
+      const dispatchFullscreenChange = () => {
+        document.dispatchEvent(new Event("fullscreenchange"));
+        if (fullscreenElement instanceof Element) {
+          fullscreenElement.dispatchEvent(new Event("fullscreenchange"));
+        }
+      };
+
+      const restoreFullscreenElement = () => {
+        if (!(fullscreenElement instanceof Element) || !fullscreenPlaceholder) {
+          fullscreenElement = null;
+          return;
+        }
+
+        fullscreenElement.setAttribute("style", previousElementStyle ?? "");
+        fullscreenPlaceholder.replaceWith(fullscreenElement);
+        fullscreenHost?.remove();
+        fullscreenHost = null;
+        fullscreenPlaceholder = null;
+        previousElementStyle = null;
+        document.body.style.overflow = previousBodyOverflow;
+        fullscreenElement = null;
+        dispatchFullscreenChange();
+      };
+
+      const applyFullscreenElement = (element) => {
+        if (!(element instanceof Element)) return;
+
+        if (fullscreenElement && fullscreenElement !== element) {
+          restoreFullscreenElement();
+        }
+
+        if (fullscreenElement === element) {
+          return;
+        }
+
+        previousBodyOverflow = document.body.style.overflow;
+        previousElementStyle = element.getAttribute("style");
+
+        fullscreenPlaceholder = document.createElement("div");
+        fullscreenPlaceholder.style.display = "none";
+        element.parentElement?.insertBefore(fullscreenPlaceholder, element);
+
+        fullscreenHost = document.createElement("div");
+        fullscreenHost.setAttribute("data-tchat-fullscreen-host", "true");
+        Object.assign(fullscreenHost.style, {
+          position: "fixed",
+          inset: "0",
+          zIndex: "2147483647",
+          background: "#4b4f67",
+          display: "grid",
+          placeItems: "center",
+          padding: "8px",
+          overflow: "auto",
+        });
+
+        document.body.appendChild(fullscreenHost);
+        fullscreenHost.appendChild(element);
+        document.body.style.overflow = "hidden";
+
+        element.setAttribute(
+          "style",
+          [
+            previousElementStyle ?? "",
+            "width: min(98vw, 1800px) !important",
+            "height: min(96vh, 1200px) !important",
+            "max-width: 98vw !important",
+            "max-height: 96vh !important",
+            "margin: 0 auto !important",
+          ].join("; "),
+        );
+
+        fullscreenElement = element;
+        dispatchFullscreenChange();
+      };
+
+      try {
+        Object.defineProperty(Document.prototype, "fullscreenElement", {
+          configurable: true,
+          get() {
+            return fullscreenElement;
+          },
+        });
+      } catch {}
+
+      try {
+        Object.defineProperty(Document.prototype, "fullscreenEnabled", {
+          configurable: true,
+          get() {
+            return true;
+          },
+        });
+      } catch {}
+
+      Element.prototype.requestFullscreen = function requestFullscreen() {
+        applyFullscreenElement(this);
+        return Promise.resolve();
+      };
+
+      Document.prototype.exitFullscreen = function exitFullscreen() {
+        restoreFullscreenElement();
+        return Promise.resolve();
+      };
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && fullscreenElement) {
+          event.preventDefault();
+
+          const exitButton = [
+            ...document.querySelectorAll("button"),
+          ].find((button) =>
+            button.querySelector("span.material-symbols-outlined")?.textContent?.trim() ===
+            "fullscreen_exit",
+          );
+
+          if (exitButton instanceof HTMLButtonElement) {
+            exitButton.click();
+            return;
+          }
+
+          restoreFullscreenElement();
+        }
+      });
+    })();
+  `);
+
   mainWindow.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {

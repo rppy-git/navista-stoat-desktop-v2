@@ -6,10 +6,13 @@ import {
   app,
   desktopCapturer,
   ipcMain,
+  nativeImage,
   session,
   shell,
 } from "electron";
 import started from "electron-squirrel-startup";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { autoLaunch } from "./native/autoLaunch";
 import { config } from "./native/config";
@@ -18,6 +21,7 @@ import { initTray } from "./native/tray";
 import { createMainWindow, getBuildUrl, mainWindow } from "./native/window";
 
 const APP_USER_MODEL_ID = "com.squirrel.TchatNavista.TchatNavista";
+const TOAST_ACTIVATOR_CLSID = "{6F9E0E9D-2E0E-4D93-9E3A-19A5B9A8C2F1}";
 
 type DesktopNotificationPayload = {
   title: string;
@@ -39,7 +43,26 @@ type DisplaySourcePreview = {
   thumbnailDataUrl: string;
 };
 
+const activeNotifications = new Set<Notification>();
+
+function writeNotificationDebugLog(stage: string, data: Record<string, unknown> = {}) {
+  try {
+    const logDir = app.getPath("userData");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, "notification-debug.log");
+    const line = `${new Date().toISOString()} ${JSON.stringify({ stage, ...data })}\n`;
+    appendFileSync(logPath, line, "utf8");
+  } catch {
+    // Ignore logging failures so notifications keep working.
+  }
+}
+
 function restoreMainWindow() {
+  writeNotificationDebugLog("window:restore:start", {
+    minimized: mainWindow.isMinimized(),
+    visible: mainWindow.isVisible(),
+  });
+
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
   }
@@ -49,16 +72,121 @@ function restoreMainWindow() {
   }
 
   mainWindow.focus();
+
+  writeNotificationDebugLog("window:restore:done", {
+    minimized: mainWindow.isMinimized(),
+    visible: mainWindow.isVisible(),
+    focused: mainWindow.isFocused(),
+  });
 }
 
 function openNotificationPath(path?: string) {
+  writeNotificationDebugLog("notification:path:start", {
+    path: path ?? null,
+    currentUrl: mainWindow.webContents.getURL(),
+  });
+
   if (!path) return;
 
   const targetUrl = new URL(path, getBuildUrl()).toString();
 
+  writeNotificationDebugLog("notification:path:resolved", {
+    path,
+    targetUrl,
+  });
+
   if (mainWindow.webContents.getURL() !== targetUrl) {
+    writeNotificationDebugLog("notification:path:load", {
+      targetUrl,
+    });
     void mainWindow.loadURL(targetUrl);
   }
+}
+
+function resolveNotificationUrl(value?: string) {
+  if (!value) return undefined;
+
+  try {
+    return new URL(value, getBuildUrl()).toString();
+  } catch {
+    return value;
+  }
+}
+
+async function convertNotificationImageToPngDataUrl(url: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return null;
+  }
+
+  try {
+    return await mainWindow.webContents.executeJavaScript(
+      `(async () => {
+        try {
+          const response = await fetch(${JSON.stringify(url)}, { credentials: "include" });
+          if (!response.ok) {
+            return null;
+          }
+
+          const blob = await response.blob();
+          const bitmap = await createImageBitmap(blob);
+          const canvas = document.createElement("canvas");
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+
+          const context = canvas.getContext("2d");
+          if (!context) {
+            return null;
+          }
+
+          context.drawImage(bitmap, 0, 0);
+          return canvas.toDataURL("image/png");
+        } catch {
+          return null;
+        }
+      })()`,
+      true,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function resolveNotificationImage(value?: string) {
+  const resolvedUrl = resolveNotificationUrl(value);
+  if (!resolvedUrl) return undefined;
+
+  try {
+    if (
+      resolvedUrl.startsWith("http://") ||
+      resolvedUrl.startsWith("https://") ||
+      resolvedUrl.startsWith("data:")
+    ) {
+      const response = await mainWindow.webContents.session.fetch(resolvedUrl);
+      if (!response.ok) {
+        return resolvedUrl;
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const image = nativeImage.createFromBuffer(buffer);
+      const isEmpty = image.isEmpty();
+
+      if (isEmpty) {
+        const pngDataUrl = await convertNotificationImageToPngDataUrl(resolvedUrl);
+        if (pngDataUrl) {
+          const pngImage = nativeImage.createFromDataURL(pngDataUrl);
+          const pngEmpty = pngImage.isEmpty();
+
+          return pngEmpty ? resolvedUrl : pngImage;
+        }
+      }
+
+      return isEmpty ? resolvedUrl : image;
+    }
+  } catch {
+    return resolvedUrl;
+  }
+
+  return resolvedUrl;
 }
 
 function canUseConfiguredOrigin(origin: string) {
@@ -600,6 +728,19 @@ if (started) {
 
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_USER_MODEL_ID);
+
+  const toastActivatorSetter =
+    "setToastActivatorClsid" in app
+      ? (app as typeof app & {
+          setToastActivatorClsid(id: string): void;
+        }).setToastActivatorClsid
+      : "setToastActivatorCLSID" in app
+        ? (app as typeof app & {
+            setToastActivatorCLSID(id: string): void;
+          }).setToastActivatorCLSID
+        : null;
+
+  toastActivatorSetter?.call(app, TOAST_ACTIVATOR_CLSID);
 }
 
 // disable hw-accel if so requested
@@ -631,19 +772,59 @@ if (acquiredLock) {
     // create window and application contexts
     createMainWindow();
 
-    ipcMain.on("notify-message", (_event, payload: DesktopNotificationPayload) => {
+    ipcMain.on("notify-message", async (_event, payload: DesktopNotificationPayload) => {
+      writeNotificationDebugLog("notification:received", {
+        title: payload.title,
+        path: payload.path ?? null,
+        icon: payload.icon ?? null,
+        image: payload.image ?? null,
+      });
+
+      const icon = await resolveNotificationImage(payload.icon);
+      const image = await resolveNotificationImage(payload.image);
+
       const notification = new Notification({
         title: payload.title,
         body: payload.body,
-        icon: payload.icon,
+        icon,
+        image,
         silent: payload.silent ?? true,
+      });
+      activeNotifications.add(notification);
+
+      writeNotificationDebugLog("notification:created", {
+        title: payload.title,
+        hasIcon: icon != null,
+        hasImage: image != null,
       });
 
       notification.on("click", () => {
+        writeNotificationDebugLog("notification:click", {
+          title: payload.title,
+          path: payload.path ?? null,
+        });
+        activeNotifications.delete(notification);
         restoreMainWindow();
         openNotificationPath(payload.path);
       });
 
+      notification.on("close", () => {
+        writeNotificationDebugLog("notification:close", {
+          title: payload.title,
+        });
+        activeNotifications.delete(notification);
+      });
+
+      notification.on("failed", () => {
+        writeNotificationDebugLog("notification:failed", {
+          title: payload.title,
+        });
+        activeNotifications.delete(notification);
+      });
+
+      writeNotificationDebugLog("notification:show", {
+        title: payload.title,
+      });
       notification.show();
     });
 

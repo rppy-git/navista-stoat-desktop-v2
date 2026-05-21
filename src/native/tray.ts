@@ -395,6 +395,13 @@ export function updateTrayMenu() {
           openServerSettingsWindow();
         },
       },
+      {
+        label: "Ouvrir les DevTools",
+        type: "normal",
+        click() {
+          mainWindow.webContents.openDevTools({ mode: "detach" });
+        },
+      },
       { type: "separator" },
       {
         label: mainWindow.isVisible() ? "Masquer l'application" : "Afficher l'application",
