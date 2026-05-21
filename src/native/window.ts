@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import {
   BrowserWindow,
+  dialog,
   Menu,
   MenuItem,
   app,
@@ -17,15 +18,17 @@ import { updateTrayMenu } from "./tray";
 // global reference to main window
 export let mainWindow: BrowserWindow;
 
-// currently in-use build
-export const BUILD_URL = new URL(
-  app.commandLine.hasSwitch("force-server")
-    ? app.commandLine.getSwitchValue("force-server")
-    : /*MAIN_WINDOW_VITE_DEV_SERVER_URL ??*/ "https://stoat.navista.fr",
-);
+export function getBuildUrl() {
+  return new URL(
+    app.commandLine.hasSwitch("force-server")
+      ? app.commandLine.getSwitchValue("force-server")
+      : config.serverUrl,
+  );
+}
 
 // internal window state
 let shouldQuit = false;
+let recoveringServerUrl = false;
 
 // load the window icon
 const windowIcon = nativeImage.createFromDataURL(windowIconAsset);
@@ -84,7 +87,7 @@ export function createMainWindow() {
   }
 
   // load the entrypoint
-  mainWindow.loadURL(BUILD_URL.toString());
+  void mainWindow.loadURL(getBuildUrl().toString());
 
   // minimise window to tray
   mainWindow.on("close", (event) => {
@@ -142,7 +145,56 @@ export function createMainWindow() {
   });
 
   // send the config
-  mainWindow.webContents.on("did-finish-load", () => config.sync());
+  mainWindow.webContents.on("did-finish-load", () => {
+    recoveringServerUrl = false;
+    config.lastValidServerUrl = config.serverUrl;
+
+    const recentUrls = [
+      config.serverUrl,
+      ...config.recentServerUrls.filter((url) => url !== config.serverUrl),
+    ].slice(0, 5);
+    config.recentServerUrls = recentUrls;
+
+    config.sync();
+  });
+
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (!isMainFrame || recoveringServerUrl) {
+        return;
+      }
+
+      const targetUrl = getBuildUrl().toString();
+      if (validatedUrl !== targetUrl) {
+        return;
+      }
+
+      const fallbackUrl = config.lastValidServerUrl;
+      if (!fallbackUrl || fallbackUrl === config.serverUrl) {
+        void dialog.showMessageBox(mainWindow, {
+          type: "error",
+          title: "Connexion impossible",
+          message: "Le serveur est inaccessible.",
+          detail: `${errorDescription} (${errorCode})`,
+        });
+        return;
+      }
+
+      recoveringServerUrl = true;
+      config.serverUrl = fallbackUrl;
+
+      void dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        title: "Retour au dernier serveur valide",
+        message:
+          "Le serveur configure n'a pas pu etre charge. Retour au dernier serveur valide.",
+        detail: `${validatedUrl}\n\nErreur: ${errorDescription} (${errorCode})`,
+      });
+
+      void mainWindow.loadURL(fallbackUrl);
+    },
+  );
 
   // configure spellchecker context menu
   mainWindow.webContents.on("context-menu", (_, params) => {
