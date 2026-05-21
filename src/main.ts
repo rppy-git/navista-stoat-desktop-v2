@@ -3,6 +3,7 @@
 import {
   BrowserWindow,
   Notification,
+  type NativeImage,
   app,
   desktopCapturer,
   ipcMain,
@@ -11,7 +12,8 @@ import {
   shell,
 } from "electron";
 import started from "electron-squirrel-startup";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { autoLaunch } from "./native/autoLaunch";
@@ -22,6 +24,7 @@ import { createMainWindow, getBuildUrl, mainWindow } from "./native/window";
 
 const APP_USER_MODEL_ID = "com.squirrel.TchatNavista.TchatNavista";
 const TOAST_ACTIVATOR_CLSID = "{6F9E0E9D-2E0E-4D93-9E3A-19A5B9A8C2F1}";
+const APP_PROTOCOL = "tchatnavista";
 
 type DesktopNotificationPayload = {
   title: string;
@@ -44,25 +47,143 @@ type DisplaySourcePreview = {
 };
 
 const activeNotifications = new Set<Notification>();
+let pendingNotificationPath: string | undefined;
+let lastHandledNotification:
+  | {
+      path?: string;
+      handledAt: number;
+    }
+  | undefined;
 
-function writeNotificationDebugLog(stage: string, data: Record<string, unknown> = {}) {
+function escapeXml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function buildNotificationProtocolUrl(path?: string) {
+  const target = new URL(`${APP_PROTOCOL}://notification`);
+
+  if (path) {
+    target.searchParams.set("path", path);
+  }
+
+  return target.toString();
+}
+
+function materializeWindowsToastIcon(
+  icon?: string | NativeImage,
+) {
+  if (!icon) {
+    return undefined;
+  }
+
+  let image: NativeImage | null = null;
+
+  if (typeof icon === "string") {
+    if (icon.startsWith("data:")) {
+      image = nativeImage.createFromDataURL(icon);
+    } else {
+      return icon;
+    }
+  } else {
+    image = icon;
+  }
+
+  if (!image || image.isEmpty()) {
+    return undefined;
+  }
+
+  const png = image.toPNG();
+  const hash = createHash("sha1").update(png).digest("hex");
+  const iconDir = join(app.getPath("userData"), "notification-icons");
+  const iconPath = join(iconDir, `${hash}.png`);
+
+  if (!existsSync(iconPath)) {
+    mkdirSync(iconDir, { recursive: true });
+    writeFileSync(iconPath, png);
+  }
+
+  return iconPath;
+}
+
+function buildWindowsToastXml(
+  payload: DesktopNotificationPayload,
+  iconPath?: string,
+) {
+  const title = escapeXml(payload.title);
+  const body = escapeXml(payload.body ?? "");
+  const launch = escapeXml(buildNotificationProtocolUrl(payload.path));
+  const iconXml = iconPath
+    ? `<image placement="appLogoOverride" hint-crop="circle" src="${escapeXml(iconPath)}" />`
+    : "";
+
+  return `
+    <toast activationType="protocol" launch="${launch}">
+      <visual>
+        <binding template="ToastGeneric">
+          ${iconXml}
+          <text>${title}</text>
+          ${body ? `<text>${body}</text>` : ""}
+        </binding>
+      </visual>
+      <audio silent="true" />
+    </toast>
+  `.trim();
+}
+
+function handleProtocolUrl(urlString?: string | null) {
+  if (!urlString) {
+    return false;
+  }
+
   try {
-    const logDir = app.getPath("userData");
-    mkdirSync(logDir, { recursive: true });
-    const logPath = join(logDir, "notification-debug.log");
-    const line = `${new Date().toISOString()} ${JSON.stringify({ stage, ...data })}\n`;
-    appendFileSync(logPath, line, "utf8");
+    const url = new URL(urlString);
+    if (url.protocol !== `${APP_PROTOCOL}:`) {
+      return false;
+    }
+
+    const path = url.searchParams.get("path") ?? undefined;
+
+    if (
+      lastHandledNotification &&
+      lastHandledNotification.path === path &&
+      Date.now() - lastHandledNotification.handledAt < 3000
+    ) {
+      return true;
+    }
+
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      pendingNotificationPath = path;
+      return true;
+    }
+
+    restoreMainWindow();
+    void openNotificationPath(path);
+    return true;
   } catch {
-    // Ignore logging failures so notifications keep working.
+    return false;
   }
 }
 
-function restoreMainWindow() {
-  writeNotificationDebugLog("window:restore:start", {
-    minimized: mainWindow.isMinimized(),
-    visible: mainWindow.isVisible(),
-  });
+function registerAppProtocol() {
+  if (process.platform !== "win32") {
+    return;
+  }
 
+  app.isPackaged
+    ? app.setAsDefaultProtocolClient(APP_PROTOCOL)
+    : process.defaultApp && process.argv.length >= 2
+      ? app.setAsDefaultProtocolClient(APP_PROTOCOL, process.execPath, [
+          process.argv[1],
+        ])
+      : app.setAsDefaultProtocolClient(APP_PROTOCOL);
+}
+
+function restoreMainWindow() {
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
   }
@@ -72,34 +193,58 @@ function restoreMainWindow() {
   }
 
   mainWindow.focus();
-
-  writeNotificationDebugLog("window:restore:done", {
-    minimized: mainWindow.isMinimized(),
-    visible: mainWindow.isVisible(),
-    focused: mainWindow.isFocused(),
-  });
 }
 
-function openNotificationPath(path?: string) {
-  writeNotificationDebugLog("notification:path:start", {
-    path: path ?? null,
-    currentUrl: mainWindow.webContents.getURL(),
-  });
+async function navigateMainWindowToPath(path: string) {
+  const targetUrl = new URL(path, getBuildUrl());
+  const targetPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+  const currentUrl = mainWindow.webContents.getURL();
 
+  try {
+    const current = new URL(currentUrl);
+
+    if (current.origin === targetUrl.origin) {
+      await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const targetPath = ${JSON.stringify(targetPath)};
+          const currentPath = location.pathname + location.search + location.hash;
+
+          if (currentPath !== targetPath) {
+            history.pushState({}, "", targetPath);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          }
+        })()`,
+        true,
+      );
+
+      return;
+    }
+  } catch {
+    // Fall back to reloading the app shell below.
+  }
+
+  await mainWindow.loadURL(getBuildUrl().toString());
+  await mainWindow.webContents.executeJavaScript(
+    `(() => {
+      const targetPath = ${JSON.stringify(targetPath)};
+      const currentPath = location.pathname + location.search + location.hash;
+
+      if (currentPath !== targetPath) {
+        history.pushState({}, "", targetPath);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
+    })()`,
+    true,
+  );
+}
+
+async function openNotificationPath(path?: string) {
   if (!path) return;
 
   const targetUrl = new URL(path, getBuildUrl()).toString();
 
-  writeNotificationDebugLog("notification:path:resolved", {
-    path,
-    targetUrl,
-  });
-
   if (mainWindow.webContents.getURL() !== targetUrl) {
-    writeNotificationDebugLog("notification:path:load", {
-      targetUrl,
-    });
-    void mainWindow.loadURL(targetUrl);
+    await navigateMainWindowToPath(path);
   }
 }
 
@@ -741,6 +886,8 @@ if (process.platform === "win32") {
         : null;
 
   toastActivatorSetter?.call(app, TOAST_ACTIVATOR_CLSID);
+
+  handleProtocolUrl(process.argv.find((arg) => arg.startsWith(`${APP_PROTOCOL}://`)));
 }
 
 // disable hw-accel if so requested
@@ -768,20 +915,25 @@ if (acquiredLock) {
   // create and configure the app when electron is ready
   app.on("ready", () => {
     setupDisplayMediaSupport();
+    registerAppProtocol();
 
     // create window and application contexts
     createMainWindow();
 
-    ipcMain.on("notify-message", async (_event, payload: DesktopNotificationPayload) => {
-      writeNotificationDebugLog("notification:received", {
-        title: payload.title,
-        path: payload.path ?? null,
-        icon: payload.icon ?? null,
-        image: payload.image ?? null,
-      });
+    if (pendingNotificationPath) {
+      const queuedPath = pendingNotificationPath;
+      pendingNotificationPath = undefined;
+      restoreMainWindow();
+      void openNotificationPath(queuedPath);
+    }
 
+    ipcMain.on("notify-message", async (_event, payload: DesktopNotificationPayload) => {
       const icon = await resolveNotificationImage(payload.icon);
       const image = await resolveNotificationImage(payload.image);
+      const toastIconPath =
+        process.platform === "win32"
+          ? materializeWindowsToastIcon(icon)
+          : undefined;
 
       const notification = new Notification({
         title: payload.title,
@@ -789,41 +941,31 @@ if (acquiredLock) {
         icon,
         image,
         silent: payload.silent ?? true,
+        toastXml: process.platform === "win32"
+          ? buildWindowsToastXml(payload, toastIconPath)
+          : undefined,
       });
       activeNotifications.add(notification);
 
-      writeNotificationDebugLog("notification:created", {
-        title: payload.title,
-        hasIcon: icon != null,
-        hasImage: image != null,
-      });
-
       notification.on("click", () => {
-        writeNotificationDebugLog("notification:click", {
-          title: payload.title,
-          path: payload.path ?? null,
-        });
         activeNotifications.delete(notification);
-        restoreMainWindow();
-        openNotificationPath(payload.path);
+
+        if (process.platform !== "win32") {
+          lastHandledNotification = {
+            path: payload.path,
+            handledAt: Date.now(),
+          };
+          restoreMainWindow();
+          void openNotificationPath(payload.path);
+        }
       });
 
       notification.on("close", () => {
-        writeNotificationDebugLog("notification:close", {
-          title: payload.title,
-        });
         activeNotifications.delete(notification);
       });
 
       notification.on("failed", () => {
-        writeNotificationDebugLog("notification:failed", {
-          title: payload.title,
-        });
         activeNotifications.delete(notification);
-      });
-
-      writeNotificationDebugLog("notification:show", {
-        title: payload.title,
       });
       notification.show();
     });
@@ -841,7 +983,15 @@ if (acquiredLock) {
   });
 
   // focus the window if we try to launch again
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, commandLine) => {
+    const protocolUrl = commandLine.find((arg) =>
+      arg.startsWith(`${APP_PROTOCOL}://`),
+    );
+
+    if (handleProtocolUrl(protocolUrl)) {
+      return;
+    }
+
     restoreMainWindow();
   });
 
