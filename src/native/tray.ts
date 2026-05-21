@@ -47,10 +47,8 @@ function openServerSettingsWindow() {
   }
 
   serverSettingsWindow = new BrowserWindow({
-    width: 640,
-    height: 520,
-    minWidth: 640,
-    minHeight: 520,
+    width: 720,
+    height: 620,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -90,13 +88,12 @@ function openServerSettingsWindow() {
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 24px;
+        padding: 20px;
         font-family: "Segoe UI", sans-serif;
         background: linear-gradient(180deg, #0f172a 0%, var(--bg) 100%);
         color: var(--text);
-        min-height: 100vh;
-        overflow-x: hidden;
-        overflow-y: auto;
+        height: 100vh;
+        overflow: hidden;
       }
       .panel {
         background: color-mix(in srgb, var(--panel) 92%, white 8%);
@@ -104,8 +101,10 @@ function openServerSettingsWindow() {
         border-radius: 14px;
         padding: 18px;
         box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
-        min-height: calc(100vh - 48px);
-        padding-bottom: 24px;
+        height: calc(100vh - 40px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       h1 {
         margin: 0 0 8px;
@@ -148,6 +147,7 @@ function openServerSettingsWindow() {
       }
       .recent {
         margin-top: 18px;
+        min-height: 0;
       }
       .recent h2 {
         margin: 0 0 10px;
@@ -159,7 +159,7 @@ function openServerSettingsWindow() {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        max-height: 140px;
+        max-height: 110px;
         overflow-y: auto;
         padding-right: 4px;
       }
@@ -172,11 +172,36 @@ function openServerSettingsWindow() {
         display: flex;
         justify-content: space-between;
         gap: 10px;
-        margin-top: 18px;
+        margin-top: auto;
+        padding-top: 18px;
       }
       .actions-right {
         display: flex;
         gap: 10px;
+      }
+      .maintenance {
+        margin-top: 18px;
+        padding-top: 18px;
+        border-top: 1px solid rgba(156, 163, 175, 0.18);
+      }
+      .maintenance h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #d1d5db;
+      }
+      .maintenance p {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .danger {
+        background: #7f1d1d;
+        color: white;
+        border: 1px solid #991b1b;
+      }
+      .danger:hover {
+        background: #991b1b;
       }
       button {
         border: 0;
@@ -204,19 +229,24 @@ function openServerSettingsWindow() {
   <body>
     <div class="panel">
       <h1>URL du serveur</h1>
-      <p>Changez le serveur Stoat utilise par l'application desktop. La fenetre principale sera rechargee apres l'enregistrement.</p>
+      <p>Changez le serveur Stoat utilisé par l'application desktop. La fenêtre principale sera rechargée après l'enregistrement.</p>
       <label for="server-url">Adresse du serveur</label>
       <input id="server-url" value="${currentUrl}" autocomplete="off" spellcheck="false" />
       <div class="error" id="error"></div>
       <div class="hint">Exemple : ${DEFAULT_SERVER_URL}</div>
       <div class="recent">
-        <h2>Serveurs recents</h2>
+        <h2>Serveurs récents</h2>
         <div class="recent-list">
           ${renderRecentServerUrls()}
         </div>
       </div>
+      <div class="maintenance">
+        <h2>Maintenance</h2>
+        <p>Supprime le cache web local de l'application puis recharge la fenêtre principale.</p>
+        <button class="danger" id="clear-cache" type="button">Vider le cache et recharger</button>
+      </div>
       <div class="actions">
-        <button class="ghost" id="reset" type="button">Reinitialiser</button>
+        <button class="ghost" id="reset" type="button">Réinitialiser</button>
         <div class="actions-right">
           <button class="secondary" id="cancel" type="button">Annuler</button>
           <button class="primary" id="save" type="button">Enregistrer et recharger</button>
@@ -228,6 +258,7 @@ function openServerSettingsWindow() {
       const input = document.getElementById("server-url");
       const error = document.getElementById("error");
       const reset = document.getElementById("reset");
+      const clearCache = document.getElementById("clear-cache");
       const closeWindow = () => window.close();
       const defaultUrl = ${JSON.stringify(DEFAULT_SERVER_URL)};
       const validateUrl = (value) => {
@@ -252,6 +283,17 @@ function openServerSettingsWindow() {
         input.value = defaultUrl;
         error.textContent = "";
         input.focus();
+      });
+      clearCache.addEventListener("click", async () => {
+        clearCache.disabled = true;
+        error.textContent = "";
+        try {
+          await ipcRenderer.invoke("clear-app-cache");
+          closeWindow();
+        } catch {
+          error.textContent = "Le vidage du cache a échoué.";
+          clearCache.disabled = false;
+        }
       });
       document.getElementById("cancel").addEventListener("click", closeWindow);
       document.getElementById("save").addEventListener("click", save);
@@ -289,6 +331,18 @@ ipcMain.on("set-server-url", (_event, value: string) => {
   } catch (error) {
     console.warn("Ignoring invalid server URL", error);
   }
+});
+
+ipcMain.handle("clear-app-cache", async () => {
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.webContents.session.clearStorageData();
+
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  await mainWindow.loadURL(config.serverUrl);
+  return true;
 });
 
 // Create and resize tray icon for macOS
