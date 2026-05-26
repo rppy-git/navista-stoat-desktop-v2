@@ -14,8 +14,8 @@ import { FuseV1Options, FuseVersion } from "@electron/fuses";
 
 const STRINGS = {
   author: "Revolt Platforms LTD",
-  name: "ChatNavista",
-  execName: "ChatNavista",
+  name: "TchatNavista",
+  execName: "TchatNavista",
   description: "Open source user-first chat platform.",
 };
 
@@ -36,7 +36,7 @@ const makers: ForgeConfig["makers"] = [
     exe: `${STRINGS.execName}.exe`,
     setupExe: `${STRINGS.execName}-setup.exe`,
     copyright: "Copyright (C) 2025 Revolt Platforms LTD",
-    appUserModelId: "com.squirrel.ChatNavista.ChatNavista",
+    appUserModelId: "com.squirrel.TchatNavista.TchatNavista",
 
   }),
   new MakerZIP({}),

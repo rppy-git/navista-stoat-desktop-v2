@@ -6,10 +6,24 @@ import Store from "electron-store";
 import { destroyDiscordRpc, initDiscordRpc } from "./discordRpc";
 import { mainWindow } from "./window";
 
+export const DEFAULT_SERVER_URL = "https://chat.navista.fr";
+
 const schema = {
   firstLaunch: {
     type: "boolean",
   } as JSONSchema.Boolean,
+  serverUrl: {
+    type: "string",
+  } as JSONSchema.String,
+  lastValidServerUrl: {
+    type: "string",
+  } as JSONSchema.String,
+  recentServerUrls: {
+    type: "array",
+    items: {
+      type: "string",
+    } as JSONSchema.String,
+  } as JSONSchema.Array,
   customFrame: {
     type: "boolean",
   } as JSONSchema.Boolean,
@@ -54,6 +68,9 @@ const store = new Store({
   schema,
   defaults: {
     firstLaunch: true,
+    serverUrl: DEFAULT_SERVER_URL,
+    lastValidServerUrl: DEFAULT_SERVER_URL,
+    recentServerUrls: [DEFAULT_SERVER_URL],
     customFrame: true,
     minimiseToTray: true,
     startMinimisedToTray: false,
@@ -77,6 +94,9 @@ class Config {
   sync() {
     mainWindow.webContents.send("config", {
       firstLaunch: this.firstLaunch,
+      serverUrl: this.serverUrl,
+      lastValidServerUrl: this.lastValidServerUrl,
+      recentServerUrls: this.recentServerUrls,
       customFrame: this.customFrame,
       minimiseToTray: this.minimiseToTray,
       startMinimisedToTray: this.startMinimisedToTray,
@@ -94,6 +114,57 @@ class Config {
   set firstLaunch(value: boolean) {
     (store as never as { set(k: string, value: boolean): void }).set(
       "firstLaunch",
+      value,
+    );
+
+    this.sync();
+  }
+
+  get serverUrl() {
+    return (
+      (store as never as { get(k: string): string | undefined }).get(
+        "serverUrl",
+      ) ?? DEFAULT_SERVER_URL
+    );
+  }
+
+  set serverUrl(value: string) {
+    (store as never as { set(k: string, value: string): void }).set(
+      "serverUrl",
+      value,
+    );
+
+    this.sync();
+  }
+
+  get lastValidServerUrl() {
+    return (
+      (store as never as { get(k: string): string | undefined }).get(
+        "lastValidServerUrl",
+      ) ?? this.serverUrl
+    );
+  }
+
+  set lastValidServerUrl(value: string) {
+    (store as never as { set(k: string, value: string): void }).set(
+      "lastValidServerUrl",
+      value,
+    );
+
+    this.sync();
+  }
+
+  get recentServerUrls() {
+    return (
+      (store as never as { get(k: string): string[] | undefined }).get(
+        "recentServerUrls",
+      ) ?? [this.serverUrl]
+    );
+  }
+
+  set recentServerUrls(value: string[]) {
+    (store as never as { set(k: string, value: string[]): void }).set(
+      "recentServerUrls",
       value,
     );
 

@@ -1,6 +1,26 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-let config: DesktopConfig;
+const defaultConfig: DesktopConfig = {
+  firstLaunch: true,
+  serverUrl: "https://chat.navista.fr",
+  lastValidServerUrl: "https://chat.navista.fr",
+  recentServerUrls: ["https://chat.navista.fr"],
+  customFrame: true,
+  minimiseToTray: true,
+  startMinimisedToTray: false,
+  spellchecker: true,
+  hardwareAcceleration: true,
+  discordRpc: true,
+  windowState: {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    isMaximised: false,
+  },
+};
+
+let config: DesktopConfig = defaultConfig;
 
 ipcRenderer.on("config", (_, data) => (config = data));
 

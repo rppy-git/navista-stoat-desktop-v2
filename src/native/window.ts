@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import {
   BrowserWindow,
+  dialog,
   Menu,
   MenuItem,
   app,
@@ -17,15 +18,88 @@ import { updateTrayMenu } from "./tray";
 // global reference to main window
 export let mainWindow: BrowserWindow;
 
-// currently in-use build
-export const BUILD_URL = new URL(
-  app.commandLine.hasSwitch("force-server")
-    ? app.commandLine.getSwitchValue("force-server")
-    : /*MAIN_WINDOW_VITE_DEV_SERVER_URL ??*/ "https://stoat.navista.fr",
-);
+export function getBuildUrl(options?: { cacheBust?: boolean }) {
+  const url = new URL(
+    app.commandLine.hasSwitch("force-server")
+      ? app.commandLine.getSwitchValue("force-server")
+      : config.serverUrl,
+  );
+
+  if (options?.cacheBust) {
+    url.searchParams.set("_desktop_refresh", Date.now().toString());
+  }
+
+  return url;
+}
+
+async function hardRefreshMainWindow() {
+  const appUrl = getBuildUrl({ cacheBust: true }).toString();
+
+  try {
+    await mainWindow.webContents.executeJavaScript(
+      `
+        Promise.allSettled([
+          typeof caches === "undefined"
+            ? Promise.resolve()
+            : caches.keys().then((keys) =>
+                Promise.all(keys.map((key) => caches.delete(key))),
+              ),
+          typeof navigator === "undefined" || !("serviceWorker" in navigator)
+            ? Promise.resolve()
+            : navigator.serviceWorker
+                .getRegistrations()
+                .then((registrations) =>
+                  Promise.all(registrations.map((registration) => registration.unregister())),
+                ),
+        ]);
+      `,
+      true,
+    );
+  } catch {
+    // The current page may already be in a broken state.
+  }
+
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.webContents.session.clearStorageData();
+  await mainWindow.loadURL("about:blank");
+  await mainWindow.loadURL(appUrl);
+}
+
+async function softRefreshMainWindow() {
+  const targetUrl = getBuildUrl({ cacheBust: true }).toString();
+
+  try {
+    await mainWindow.webContents.executeJavaScript(
+      `
+        Promise.allSettled([
+          typeof caches === "undefined"
+            ? Promise.resolve()
+            : caches.keys().then((keys) =>
+                Promise.all(keys.map((key) => caches.delete(key))),
+              ),
+          typeof navigator === "undefined" || !("serviceWorker" in navigator)
+            ? Promise.resolve()
+            : navigator.serviceWorker
+                .getRegistrations()
+                .then((registrations) =>
+                  Promise.all(registrations.map((registration) => registration.unregister())),
+                ),
+        ]);
+      `,
+      true,
+    );
+  } catch {
+    // The current page may already be in a broken state.
+  }
+
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.loadURL("about:blank");
+  await mainWindow.loadURL(targetUrl);
+}
 
 // internal window state
 let shouldQuit = false;
+let recoveringServerUrl = false;
 
 // load the window icon
 const windowIcon = nativeImage.createFromDataURL(windowIconAsset);
@@ -84,7 +158,7 @@ export function createMainWindow() {
   }
 
   // load the entrypoint
-  mainWindow.loadURL(BUILD_URL.toString());
+  void mainWindow.loadURL(getBuildUrl().toString());
 
   // minimise window to tray
   mainWindow.on("close", (event) => {
@@ -133,16 +207,207 @@ export function createMainWindow() {
       event.preventDefault();
       mainWindow.webContents.setZoomLevel(0);
     } else if (
+      (input.control || input.meta) &&
+      ((input.shift && input.key.toLowerCase() === "r") || input.key === "F5")
+    ) {
+      event.preventDefault();
+      void hardRefreshMainWindow();
+    } else if (
       input.key === "F5" ||
       ((input.control || input.meta) && input.key.toLowerCase() === "r")
     ) {
       event.preventDefault();
-      mainWindow.webContents.reload();
+      void softRefreshMainWindow();
     }
   });
 
   // send the config
-  mainWindow.webContents.on("did-finish-load", () => config.sync());
+  mainWindow.webContents.on("did-finish-load", () => {
+    recoveringServerUrl = false;
+    config.lastValidServerUrl = config.serverUrl;
+
+    const recentUrls = [
+      config.serverUrl,
+      ...config.recentServerUrls.filter((url) => url !== config.serverUrl),
+    ].slice(0, 5);
+    config.recentServerUrls = recentUrls;
+
+    config.sync();
+  });
+
+  void mainWindow.webContents.executeJavaScript(`
+    (() => {
+      if (window.__tchatElementFullscreenInstalled) return;
+      window.__tchatElementFullscreenInstalled = true;
+
+      let fullscreenElement = null;
+      let fullscreenHost = null;
+      let fullscreenPlaceholder = null;
+      let previousBodyOverflow = "";
+      let previousElementStyle = null;
+
+      const dispatchFullscreenChange = () => {
+        document.dispatchEvent(new Event("fullscreenchange"));
+        if (fullscreenElement instanceof Element) {
+          fullscreenElement.dispatchEvent(new Event("fullscreenchange"));
+        }
+      };
+
+      const restoreFullscreenElement = () => {
+        if (!(fullscreenElement instanceof Element) || !fullscreenPlaceholder) {
+          fullscreenElement = null;
+          return;
+        }
+
+        fullscreenElement.setAttribute("style", previousElementStyle ?? "");
+        fullscreenPlaceholder.replaceWith(fullscreenElement);
+        fullscreenHost?.remove();
+        fullscreenHost = null;
+        fullscreenPlaceholder = null;
+        previousElementStyle = null;
+        document.body.style.overflow = previousBodyOverflow;
+        fullscreenElement = null;
+        dispatchFullscreenChange();
+      };
+
+      const applyFullscreenElement = (element) => {
+        if (!(element instanceof Element)) return;
+
+        if (fullscreenElement && fullscreenElement !== element) {
+          restoreFullscreenElement();
+        }
+
+        if (fullscreenElement === element) {
+          return;
+        }
+
+        previousBodyOverflow = document.body.style.overflow;
+        previousElementStyle = element.getAttribute("style");
+
+        fullscreenPlaceholder = document.createElement("div");
+        fullscreenPlaceholder.style.display = "none";
+        element.parentElement?.insertBefore(fullscreenPlaceholder, element);
+
+        fullscreenHost = document.createElement("div");
+        fullscreenHost.setAttribute("data-tchat-fullscreen-host", "true");
+        Object.assign(fullscreenHost.style, {
+          position: "fixed",
+          inset: "0",
+          zIndex: "2147483647",
+          background: "#4b4f67",
+          display: "grid",
+          placeItems: "center",
+          padding: "8px",
+          overflow: "auto",
+        });
+
+        document.body.appendChild(fullscreenHost);
+        fullscreenHost.appendChild(element);
+        document.body.style.overflow = "hidden";
+
+        element.setAttribute(
+          "style",
+          [
+            previousElementStyle ?? "",
+            "width: min(98vw, 1800px) !important",
+            "height: min(96vh, 1200px) !important",
+            "max-width: 98vw !important",
+            "max-height: 96vh !important",
+            "margin: 0 auto !important",
+          ].join("; "),
+        );
+
+        fullscreenElement = element;
+        dispatchFullscreenChange();
+      };
+
+      try {
+        Object.defineProperty(Document.prototype, "fullscreenElement", {
+          configurable: true,
+          get() {
+            return fullscreenElement;
+          },
+        });
+      } catch {}
+
+      try {
+        Object.defineProperty(Document.prototype, "fullscreenEnabled", {
+          configurable: true,
+          get() {
+            return true;
+          },
+        });
+      } catch {}
+
+      Element.prototype.requestFullscreen = function requestFullscreen() {
+        applyFullscreenElement(this);
+        return Promise.resolve();
+      };
+
+      Document.prototype.exitFullscreen = function exitFullscreen() {
+        restoreFullscreenElement();
+        return Promise.resolve();
+      };
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && fullscreenElement) {
+          event.preventDefault();
+
+          const exitButton = [
+            ...document.querySelectorAll("button"),
+          ].find((button) =>
+            button.querySelector("span.material-symbols-outlined")?.textContent?.trim() ===
+            "fullscreen_exit",
+          );
+
+          if (exitButton instanceof HTMLButtonElement) {
+            exitButton.click();
+            return;
+          }
+
+          restoreFullscreenElement();
+        }
+      });
+    })();
+  `);
+
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (!isMainFrame || recoveringServerUrl) {
+        return;
+      }
+
+      const targetUrl = getBuildUrl().toString();
+      if (validatedUrl !== targetUrl) {
+        return;
+      }
+
+      const fallbackUrl = config.lastValidServerUrl;
+      if (!fallbackUrl || fallbackUrl === config.serverUrl) {
+        void dialog.showMessageBox(mainWindow, {
+          type: "error",
+          title: "Connexion impossible",
+          message: "Le serveur est inaccessible.",
+          detail: `${errorDescription} (${errorCode})`,
+        });
+        return;
+      }
+
+      recoveringServerUrl = true;
+      config.serverUrl = fallbackUrl;
+
+      void dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        title: "Retour au dernier serveur valide",
+        message:
+          "Le serveur configure n'a pas pu etre charge. Retour au dernier serveur valide.",
+        detail: `${validatedUrl}\n\nErreur: ${errorDescription} (${errorCode})`,
+      });
+
+      void mainWindow.loadURL(fallbackUrl);
+    },
+  );
 
   // configure spellchecker context menu
   mainWindow.webContents.on("context-menu", (_, params) => {
