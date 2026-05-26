@@ -2,9 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 
 const defaultConfig: DesktopConfig = {
   firstLaunch: true,
-  serverUrl: "https://chat.navista.fr",
-  lastValidServerUrl: "https://chat.navista.fr",
-  recentServerUrls: ["https://chat.navista.fr"],
+  serverUrl: "https://stoat.navista.fr",
+  lastValidServerUrl: "https://stoat.navista.fr",
+  recentServerUrls: ["https://stoat.navista.fr"],
   customFrame: true,
   minimiseToTray: true,
   startMinimisedToTray: false,

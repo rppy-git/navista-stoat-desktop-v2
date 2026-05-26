@@ -6,7 +6,7 @@ import Store from "electron-store";
 import { destroyDiscordRpc, initDiscordRpc } from "./discordRpc";
 import { mainWindow } from "./window";
 
-export const DEFAULT_SERVER_URL = "https://chat.navista.fr";
+export const DEFAULT_SERVER_URL = "https://stoat.navista.fr";
 
 const schema = {
   firstLaunch: {
