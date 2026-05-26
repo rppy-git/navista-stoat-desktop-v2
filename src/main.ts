@@ -12,6 +12,7 @@ import {
   shell,
 } from "electron";
 import started from "electron-squirrel-startup";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -181,6 +182,30 @@ function registerAppProtocol() {
           process.argv[1],
         ])
       : app.setAsDefaultProtocolClient(APP_PROTOCOL);
+}
+
+function syncWindowsUninstallDisplayIcon() {
+  if (process.platform !== "win32" || !app.isPackaged) {
+    return;
+  }
+
+  execFile(
+    "reg.exe",
+    [
+      "add",
+      "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TchatNavista",
+      "/v",
+      "DisplayIcon",
+      "/t",
+      "REG_SZ",
+      "/d",
+      `${process.execPath},0`,
+      "/f",
+    ],
+    () => {
+      // Best effort only: failure here should not block app startup.
+    },
+  );
 }
 
 function restoreMainWindow() {
@@ -916,6 +941,7 @@ if (acquiredLock) {
   app.on("ready", () => {
     setupDisplayMediaSupport();
     registerAppProtocol();
+    syncWindowsUninstallDisplayIcon();
 
     // create window and application contexts
     createMainWindow();

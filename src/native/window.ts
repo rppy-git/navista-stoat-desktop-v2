@@ -18,12 +18,83 @@ import { updateTrayMenu } from "./tray";
 // global reference to main window
 export let mainWindow: BrowserWindow;
 
-export function getBuildUrl() {
-  return new URL(
+export function getBuildUrl(options?: { cacheBust?: boolean }) {
+  const url = new URL(
     app.commandLine.hasSwitch("force-server")
       ? app.commandLine.getSwitchValue("force-server")
       : config.serverUrl,
   );
+
+  if (options?.cacheBust) {
+    url.searchParams.set("_desktop_refresh", Date.now().toString());
+  }
+
+  return url;
+}
+
+async function hardRefreshMainWindow() {
+  const appUrl = getBuildUrl({ cacheBust: true }).toString();
+
+  try {
+    await mainWindow.webContents.executeJavaScript(
+      `
+        Promise.allSettled([
+          typeof caches === "undefined"
+            ? Promise.resolve()
+            : caches.keys().then((keys) =>
+                Promise.all(keys.map((key) => caches.delete(key))),
+              ),
+          typeof navigator === "undefined" || !("serviceWorker" in navigator)
+            ? Promise.resolve()
+            : navigator.serviceWorker
+                .getRegistrations()
+                .then((registrations) =>
+                  Promise.all(registrations.map((registration) => registration.unregister())),
+                ),
+        ]);
+      `,
+      true,
+    );
+  } catch {
+    // The current page may already be in a broken state.
+  }
+
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.webContents.session.clearStorageData();
+  await mainWindow.loadURL("about:blank");
+  await mainWindow.loadURL(appUrl);
+}
+
+async function softRefreshMainWindow() {
+  const targetUrl = getBuildUrl({ cacheBust: true }).toString();
+
+  try {
+    await mainWindow.webContents.executeJavaScript(
+      `
+        Promise.allSettled([
+          typeof caches === "undefined"
+            ? Promise.resolve()
+            : caches.keys().then((keys) =>
+                Promise.all(keys.map((key) => caches.delete(key))),
+              ),
+          typeof navigator === "undefined" || !("serviceWorker" in navigator)
+            ? Promise.resolve()
+            : navigator.serviceWorker
+                .getRegistrations()
+                .then((registrations) =>
+                  Promise.all(registrations.map((registration) => registration.unregister())),
+                ),
+        ]);
+      `,
+      true,
+    );
+  } catch {
+    // The current page may already be in a broken state.
+  }
+
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.loadURL("about:blank");
+  await mainWindow.loadURL(targetUrl);
 }
 
 // internal window state
@@ -136,11 +207,17 @@ export function createMainWindow() {
       event.preventDefault();
       mainWindow.webContents.setZoomLevel(0);
     } else if (
+      (input.control || input.meta) &&
+      ((input.shift && input.key.toLowerCase() === "r") || input.key === "F5")
+    ) {
+      event.preventDefault();
+      void hardRefreshMainWindow();
+    } else if (
       input.key === "F5" ||
       ((input.control || input.meta) && input.key.toLowerCase() === "r")
     ) {
       event.preventDefault();
-      mainWindow.webContents.reload();
+      void softRefreshMainWindow();
     }
   });
 
