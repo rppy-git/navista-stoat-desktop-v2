@@ -1,6 +1,4 @@
-﻿import { IUpdateInfo, updateElectronApp } from "update-electron-app";
-
-import {
+﻿import {
   BrowserWindow,
   Notification,
   type NativeImage,
@@ -923,20 +921,7 @@ if (!config.hardwareAcceleration) {
 // ensure only one copy of the application can run
 const acquiredLock = app.requestSingleInstanceLock();
 
-const onNotifyUser = (_info: IUpdateInfo) => {
-  const notification = new Notification({
-    title: "Update Available",
-    body: "Restart the app to install the update.",
-    silent: true,
-  });
-
-  notification.show();
-};
-
 if (acquiredLock) {
-  // start auto update logic
-  updateElectronApp({ onNotifyUser });
-
   // create and configure the app when electron is ready
   app.on("ready", () => {
     setupDisplayMediaSupport();
@@ -1065,3 +1050,4 @@ if (acquiredLock) {
 } else {
   app.quit();
 }
+
