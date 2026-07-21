@@ -42,6 +42,17 @@ const schema = {
   discordRpc: {
     type: "boolean",
   } as JSONSchema.Boolean,
+  voiceShortcuts: {
+    type: "object",
+    properties: {
+      toggleMute: {
+        type: "string",
+      } as JSONSchema.String,
+      toggleDeafen: {
+        type: "string",
+      } as JSONSchema.String,
+    },
+  } as JSONSchema.Object,
   windowState: {
     type: "object",
     properties: {
@@ -77,6 +88,10 @@ const store = new Store({
     spellchecker: true,
     hardwareAcceleration: true,
     discordRpc: true,
+    voiceShortcuts: {
+      toggleMute: "",
+      toggleDeafen: "",
+    },
     windowState: {
       x: 0,
       y: 0,
@@ -103,6 +118,7 @@ class Config {
       spellchecker: this.spellchecker,
       hardwareAcceleration: this.hardwareAcceleration,
       discordRpc: this.discordRpc,
+      voiceShortcuts: this.voiceShortcuts,
       windowState: this.windowState,
     });
   }
@@ -263,6 +279,27 @@ class Config {
     this.sync();
   }
 
+  get voiceShortcuts() {
+    return (
+      (store as never as {
+        get(k: string): DesktopConfig["voiceShortcuts"] | undefined;
+      }).get("voiceShortcuts") ?? {
+        toggleMute: "",
+        toggleDeafen: "",
+      }
+    );
+  }
+
+  set voiceShortcuts(value: DesktopConfig["voiceShortcuts"]) {
+    (
+      store as never as {
+        set(k: string, value: DesktopConfig["voiceShortcuts"]): void;
+      }
+    ).set("voiceShortcuts", value);
+
+    this.sync();
+  }
+
   get windowState() {
     return (
       store as never as { get(k: string): DesktopConfig["windowState"] }
@@ -288,3 +325,5 @@ ipcMain.on("config", (_, newConfig: Partial<DesktopConfig>) => {
     ([key, value]) => (config[key as keyof DesktopConfig] = value as never),
   );
 });
+
+

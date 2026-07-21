@@ -2,7 +2,19 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import { version } from "../../package.json";
 
+type DesktopVoiceShortcutConfig = {
+  toggleMute: string;
+  toggleDeafen: string;
+};
+
 const serviceWorkerContainer = navigator.serviceWorker;
+const desktopVoiceShortcutConfigListeners = new Set<
+  (config: DesktopVoiceShortcutConfig) => void
+>();
+let desktopVoiceShortcutConfig: DesktopVoiceShortcutConfig = {
+  toggleMute: "",
+  toggleDeafen: "",
+};
 
 if (serviceWorkerContainer) {
   void serviceWorkerContainer
@@ -37,6 +49,16 @@ try {
   }
 }
 
+ipcRenderer.on(
+  "voice-shortcuts:config",
+  (_event, nextConfig: DesktopVoiceShortcutConfig) => {
+    desktopVoiceShortcutConfig = nextConfig;
+    desktopVoiceShortcutConfigListeners.forEach((listener) => {
+      listener(nextConfig);
+    });
+  },
+);
+
 contextBridge.exposeInMainWorld("native", {
   versions: {
     node: () => process.versions.node,
@@ -58,4 +80,18 @@ contextBridge.exposeInMainWorld("native", {
     path?: string;
     silent?: boolean;
   }) => ipcRenderer.send("notify-message", payload),
+});
+
+contextBridge.exposeInMainWorld("desktopVoiceShortcuts", {
+  getConfig: () => desktopVoiceShortcutConfig,
+  updateSettings: (settings: Partial<DesktopVoiceShortcutConfig>) =>
+    ipcRenderer.send("voice-shortcuts:update", settings),
+  onConfigChange: (callback: (config: DesktopVoiceShortcutConfig) => void) => {
+    desktopVoiceShortcutConfigListeners.add(callback);
+  },
+  offConfigChange: (
+    callback: (config: DesktopVoiceShortcutConfig) => void,
+  ) => {
+    desktopVoiceShortcutConfigListeners.delete(callback);
+  },
 });
