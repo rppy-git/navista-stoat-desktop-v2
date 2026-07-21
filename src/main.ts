@@ -1,4 +1,4 @@
-﻿import {
+import {
   BrowserWindow,
   Notification,
   type NativeImage,
@@ -19,6 +19,7 @@ import { autoLaunch } from "./native/autoLaunch";
 import { config } from "./native/config";
 import { initDiscordRpc } from "./native/discordRpc";
 import { initTray } from "./native/tray";
+import { initVoiceShortcuts } from "./native/voiceShortcuts";
 import { createMainWindow, getBuildUrl, mainWindow } from "./native/window";
 
 const APP_USER_MODEL_ID = "com.squirrel.TchatNavista.TchatNavista";
@@ -930,6 +931,7 @@ if (acquiredLock) {
 
     // create window and application contexts
     createMainWindow();
+    initVoiceShortcuts();
 
     if (pendingNotificationPath) {
       const queuedPath = pendingNotificationPath;
@@ -1018,6 +1020,7 @@ if (acquiredLock) {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
+      initVoiceShortcuts();
     } else {
       restoreMainWindow();
     }

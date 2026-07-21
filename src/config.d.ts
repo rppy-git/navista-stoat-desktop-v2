@@ -9,6 +9,10 @@ declare type DesktopConfig = {
   spellchecker: boolean;
   hardwareAcceleration: boolean;
   discordRpc: boolean;
+  voiceShortcuts: {
+    toggleMute: string;
+    toggleDeafen: string;
+  };
   windowState: {
     x: number;
     y: number;
